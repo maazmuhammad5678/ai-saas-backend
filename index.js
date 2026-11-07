@@ -1,3 +1,4 @@
+
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
@@ -15,6 +16,44 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+
+// Initialize database and seed data once per server instance
+let initializationPromise;
+
+async function initializeApp() {
+    if (!initializationPromise) {
+        initializationPromise = (async () => {
+            if (!process.env.MONGO_URI) {
+                throw new Error("MONGO_URI is missing");
+            }
+
+            await connectMongoDB(process.env.MONGO_URI);
+
+            await seedPlans();
+            await seedTools();
+            await createAdmin();
+        })().catch((error) => {
+            initializationPromise = null;
+            throw error;
+        });
+    }
+
+    return initializationPromise;
+}
+
+// Ensure database is ready before handling API requests
+app.use(async (req, res, next) => {
+    try {
+        await initializeApp();
+        next();
+    } catch (error) {
+        console.error("Initialization failed:", error.message);
+
+        res.status(500).json({
+            message: "Server initialization failed"
+        });
+    }
+});
 
 // Routes
 const userRoutes = require("./routes/userRoutes");
@@ -34,15 +73,10 @@ app.get("/", (req, res) => {
 
 // API Routes
 app.use("/api/user", userRoutes);
-
 app.use("/api/plans", planRoutes);
-
 app.use("/api/subscriptions", subscriptionRoutes);
-
 app.use("/api/ai", aiRoutes);
-
 app.use("/api/keys", apiKeyRoutes);
-
 app.use("/api/admin", adminRoutes);
 
 // 404 Handler
@@ -61,25 +95,14 @@ app.use((error, req, res, next) => {
     });
 });
 
-// Start server after database connection
-async function startServer() {
-    try {
-        await connectMongoDB(process.env.MONGO_URI);
+// Local development only
+if (require.main === module) {
+    const PORT = process.env.PORT || 8000;
 
-        await seedPlans();
-        await seedTools();
-        await createAdmin();
-
-        const PORT = process.env.PORT || 8000;
-
-        app.listen(PORT, () => {
-            console.log(`Server running on port ${PORT}`);
-        });
-
-    } catch (error) {
-        console.error("Server startup failed:", error.message);
-        process.exit(1);
-    }
+    app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+    });
 }
 
-startServer();
+// Export Express app for Vercel
+module.exports = app;
